@@ -1,0 +1,394 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Hexapod Test Control</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; padding: 12px;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #14161a; color: #e8e8e8;
+    user-select: none;
+  }
+  h1 { font-size: 16px; margin: 4px 0 12px; color: #7fd3ff; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 10px; }
+  .card {
+    background: #1e2126; border-radius: 10px; padding: 10px;
+    flex: 1; min-width: 140px;
+  }
+  label { font-size: 12px; color: #9aa0a8; display: block; margin-bottom: 4px; }
+  input[type=text] {
+    width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #333;
+    background: #101215; color: #eee; font-size: 14px;
+  }
+  button {
+    background: #2b6cb0; color: #fff; border: none; border-radius: 8px;
+    padding: 10px 12px; font-size: 13px; cursor: pointer; margin: 3px;
+  }
+  button:active { background: #1c4e82; }
+  button.danger { background: #b0392b; }
+  button.danger:active { background: #822417; }
+  button.toggle.active { background: #2f9e44; }
+  #status { font-size: 12px; padding: 6px 10px; border-radius: 6px; margin-bottom: 10px; }
+  .st-ok   { background: #1b3a24; color: #7ee08a; }
+  .st-bad  { background: #3a1b1b; color: #ff9a9a; }
+  .st-wait { background: #3a331b; color: #ffd97e; }
+
+  /* Joystick */
+  #joyWrap {
+    display: flex; justify-content: center; align-items: center;
+    margin: 10px 0;
+  }
+  #joyBase {
+    width: 220px; height: 220px; border-radius: 50%;
+    background: radial-gradient(circle, #23262c 0%, #16181c 100%);
+    border: 2px solid #333; position: relative; touch-action: none;
+  }
+  #joyStick {
+    width: 70px; height: 70px; border-radius: 50%;
+    background: #4a90d9; position: absolute;
+    top: 75px; left: 75px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+  }
+
+  /* Rotation slider */
+  #omegaWrap { display: flex; align-items: center; gap: 8px; margin: 8px 0; }
+  input[type=range] { flex: 1; }
+
+  .grid3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .modebtn, .gaitbtn { font-size: 12px; padding: 8px 4px; }
+  .modebtn.active, .gaitbtn.active { background: #2f9e44; }
+
+  #log {
+    background: #0c0d0f; border-radius: 8px; padding: 8px;
+    font-family: monospace; font-size: 11px; color: #8fbf8f;
+    height: 110px; overflow-y: auto; white-space: pre-wrap;
+  }
+  .battery-bar {
+    height: 10px; border-radius: 5px; background: #333; overflow: hidden;
+  }
+  .battery-fill { height: 100%; background: #2f9e44; width: 0%; transition: width 0.3s; }
+  .touch-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 6px; }
+  .touch-cell {
+    text-align: center; padding: 6px 2px; border-radius: 6px;
+    background: #2a2d33; font-size: 11px;
+  }
+  .touch-cell.on { background: #2f9e44; }
+</style>
+</head>
+<body>
+
+<h1>Hexapod Test Control</h1>
+
+<div class="card">
+  <label>ESP32 WebSocket URL</label>
+  <input type="text" id="wsUrl" value="ws://192.168.4.1:81">
+  <div class="row" style="margin-top:8px;">
+    <button id="btnConnect" style="flex:1;">Ket noi</button>
+    <button id="btnPing" style="flex:1;">Ping</button>
+  </div>
+  <div id="status" class="st-wait">Chua ket noi</div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <label>Pin (battery)</label>
+    <div class="battery-bar"><div class="battery-fill" id="batFill"></div></div>
+    <div id="batText" style="font-size:12px; margin-top:4px;">--</div>
+  </div>
+  <div class="card">
+    <label>Touch sensors (L1 L2 L3 / R1 R2 R3)</label>
+    <div class="touch-grid" id="touchGrid">
+      <div class="touch-cell">L1</div><div class="touch-cell">L2</div><div class="touch-cell">L3</div>
+      <div class="touch-cell">R1</div><div class="touch-cell">R2</div><div class="touch-cell">R3</div>
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <label>Di chuyen (nha ra = tu dong stop)</label>
+  <div id="joyWrap">
+    <div id="joyBase">
+      <div id="joyStick"></div>
+    </div>
+  </div>
+  <div id="omegaWrap">
+    <label style="width:60px; margin:0;">Xoay</label>
+    <input type="range" id="omegaSlider" min="-100" max="100" value="0">
+    <span id="omegaVal" style="width:36px; text-align:right;">0</span>
+  </div>
+  <div class="row">
+    <button class="danger" id="btnStop" style="flex:1;">STOP</button>
+  </div>
+</div>
+
+<div class="row">
+  <div class="card">
+    <label>Mode</label>
+    <div class="grid3">
+      <button class="modebtn" data-mode="STANDARD">STANDARD</button>
+      <button class="modebtn" data-mode="RACE">RACE</button>
+      <button class="modebtn" data-mode="OFFROAD">OFFROAD</button>
+      <button class="modebtn" data-mode="CUSTOM">CUSTOM</button>
+      <button class="modebtn" data-mode="QUADRUPED">QUADRUPED</button>
+      <button class="modebtn" data-mode="BLOCK">BLOCK</button>
+    </div>
+  </div>
+  <div class="card">
+    <label>Gait</label>
+    <div class="row">
+      <button class="gaitbtn" data-gait="TRIPOD" style="flex:1;">TRIPOD</button>
+      <button class="gaitbtn" data-gait="WAVE" style="flex:1;">WAVE</button>
+    </div>
+    <label>Toc do (speed factor)</label>
+    <input type="range" id="speedSlider" min="10" max="300" value="100">
+    <span id="speedVal">1.0x</span>
+  </div>
+</div>
+
+<div class="card">
+  <label>Body pose</label>
+  <div class="row">
+    <div style="flex:1;">
+      <label>Height (mm)</label>
+      <input type="range" id="poseHeight" min="60" max="160" value="120">
+    </div>
+    <div style="flex:1;">
+      <label>Pitch (do)</label>
+      <input type="range" id="posePitch" min="-20" max="20" value="0">
+    </div>
+  </div>
+  <div class="row">
+    <div style="flex:1;">
+      <label>Roll (do)</label>
+      <input type="range" id="poseRoll" min="-20" max="20" value="0">
+    </div>
+    <div style="flex:1;">
+      <label>Yaw (do)</label>
+      <input type="range" id="poseYaw" min="-30" max="30" value="0">
+    </div>
+  </div>
+</div>
+
+<div class="card">
+  <label>Log</label>
+  <div id="log"></div>
+</div>
+
+<script>
+let ws = null;
+let connected = false;
+let sendTimer = null;
+
+const logEl = document.getElementById('log');
+function log(msg, dir) {
+  const t = new Date().toLocaleTimeString();
+  const prefix = dir === 'out' ? '-> ' : dir === 'in' ? '<- ' : '';
+  logEl.textContent += `[${t}] ${prefix}${msg}\n`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+function setStatus(text, cls) {
+  const el = document.getElementById('status');
+  el.textContent = text;
+  el.className = cls;
+}
+
+function send(obj) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const s = JSON.stringify(obj);
+  ws.send(s);
+  log(s, 'out');
+}
+
+document.getElementById('btnConnect').addEventListener('click', () => {
+  if (connected) {
+    ws.close();
+    return;
+  }
+  const url = document.getElementById('wsUrl').value.trim();
+  setStatus('Dang ket noi...', 'st-wait');
+  log('Connecting to ' + url);
+
+  try {
+    ws = new WebSocket(url);
+  } catch (e) {
+    setStatus('URL khong hop le', 'st-bad');
+    log('Error: ' + e.message);
+    return;
+  }
+
+  ws.onopen = () => {
+    connected = true;
+    setStatus('Da ket noi', 'st-ok');
+    document.getElementById('btnConnect').textContent = 'Ngat ket noi';
+    log('WebSocket opened');
+  };
+
+  ws.onclose = () => {
+    connected = false;
+    setStatus('Mat ket noi', 'st-bad');
+    document.getElementById('btnConnect').textContent = 'Ket noi';
+    log('WebSocket closed');
+  };
+
+  ws.onerror = (e) => {
+    setStatus('Loi ket noi', 'st-bad');
+    log('Error event');
+  };
+
+  ws.onmessage = (evt) => {
+    log(evt.data, 'in');
+    try {
+      const data = JSON.parse(evt.data);
+      if (data.type === 'status') {
+        updateStatusUI(data);
+      }
+    } catch (e) {}
+  };
+});
+
+document.getElementById('btnPing').addEventListener('click', () => {
+  send({ type: 'ping' });
+});
+
+document.getElementById('btnStop').addEventListener('click', () => {
+  send({ type: 'stop' });
+  resetJoystick();
+});
+
+// --- Mode / Gait buttons ---
+document.querySelectorAll('.modebtn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.modebtn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    send({ type: 'mode', value: btn.dataset.mode });
+  });
+});
+document.querySelectorAll('.gaitbtn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.gaitbtn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    send({ type: 'gait', value: btn.dataset.gait });
+  });
+});
+
+// --- Speed slider ---
+const speedSlider = document.getElementById('speedSlider');
+const speedVal = document.getElementById('speedVal');
+speedSlider.addEventListener('input', () => {
+  const factor = speedSlider.value / 100;
+  speedVal.textContent = factor.toFixed(1) + 'x';
+  send({ type: 'speed', value: factor });
+});
+
+// --- Body pose sliders ---
+function sendPose() {
+  send({
+    type: 'pose',
+    height: Number(document.getElementById('poseHeight').value),
+    pitch:  Number(document.getElementById('posePitch').value),
+    roll:   Number(document.getElementById('poseRoll').value),
+    yaw:    Number(document.getElementById('poseYaw').value),
+  });
+}
+['poseHeight','posePitch','poseRoll','poseYaw'].forEach(id => {
+  document.getElementById(id).addEventListener('input', sendPose);
+});
+
+// --- Omega slider ---
+const omegaSlider = document.getElementById('omegaSlider');
+const omegaVal = document.getElementById('omegaVal');
+omegaSlider.addEventListener('input', () => {
+  omegaVal.textContent = omegaSlider.value;
+  sendMove();
+});
+
+// --- Joystick (vx, vy) ---
+const joyBase = document.getElementById('joyBase');
+const joyStick = document.getElementById('joyStick');
+const joyRadius = 75; // (220 - 70) / 2
+let joyX = 0, joyY = 0; // -1..1
+let dragging = false;
+
+function setStickVisual(dx, dy) {
+  joyStick.style.left = (75 + dx) + 'px';
+  joyStick.style.top  = (75 + dy) + 'px';
+}
+
+function resetJoystick() {
+  joyX = 0; joyY = 0;
+  setStickVisual(0, 0);
+  sendMove();
+}
+
+function handlePointer(clientX, clientY) {
+  const rect = joyBase.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  let dx = clientX - cx;
+  let dy = clientY - cy;
+  const dist = Math.sqrt(dx*dx + dy*dy);
+  if (dist > joyRadius) {
+    dx = dx / dist * joyRadius;
+    dy = dy / dist * joyRadius;
+  }
+  setStickVisual(dx, dy);
+  // vx = tien/lui (truc Y nguoc), vy = trai/phai (truc X)
+  joyX = dx / joyRadius;
+  joyY = -dy / joyRadius;
+  sendMove();
+}
+
+function sendMove() {
+  const omega = Number(omegaSlider.value) / 100;
+  send({ type: 'move', vx: round2(joyY), vy: round2(joyX), omega: round2(omega) });
+}
+function round2(n) { return Math.round(n * 100) / 100; }
+
+joyBase.addEventListener('pointerdown', (e) => {
+  dragging = true;
+  joyBase.setPointerCapture(e.pointerId);
+  handlePointer(e.clientX, e.clientY);
+});
+joyBase.addEventListener('pointermove', (e) => {
+  if (dragging) handlePointer(e.clientX, e.clientY);
+});
+joyBase.addEventListener('pointerup', () => {
+  dragging = false;
+  resetJoystick();
+});
+joyBase.addEventListener('pointercancel', () => {
+  dragging = false;
+  resetJoystick();
+});
+
+// --- Status UI update (battery + touch) ---
+function updateStatusUI(data) {
+  if (typeof data.battery === 'number') {
+    const v = data.battery;
+    document.getElementById('batText').textContent = v.toFixed(2) + ' V';
+    // 2S LiPo: 6.0V (0%) .. 8.4V (100%) xap xi
+    const pct = Math.max(0, Math.min(100, (v - 6.0) / (8.4 - 6.0) * 100));
+    const fill = document.getElementById('batFill');
+    fill.style.width = pct + '%';
+    fill.style.background = pct < 25 ? '#b0392b' : (pct < 50 ? '#d99a2b' : '#2f9e44');
+  }
+  if (Array.isArray(data.touch)) {
+    const cells = document.querySelectorAll('.touch-cell');
+    data.touch.forEach((v, i) => {
+      if (cells[i]) cells[i].classList.toggle('on', v == 1);
+    });
+  }
+  if (data.mode) {
+    document.querySelectorAll('.modebtn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === data.mode);
+    });
+  }
+}
+</script>
+
+</body>
+</html>
